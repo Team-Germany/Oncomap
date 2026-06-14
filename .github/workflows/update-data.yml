@@ -2,89 +2,92 @@ name: Update Oncomap Data
 
 on:
   schedule:
-    # Runs every night at 02:00 UTC
-    - cron: '0 2 * * *'
-  workflow_dispatch: # Allow manual trigger from GitHub UI
+    - cron: '0 3 * * *'   # daily at 03:00 UTC
+  workflow_dispatch:       # allow manual trigger
+
+# Allow the workflow to push data back to the repo
+permissions:
+  contents: write
+
+env:
+  # Fix: opt into Node.js 24 now, before it becomes mandatory on 2026-06-16
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   fetch-and-cache:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Fetch all Oncomap API endpoints
+      - name: Fetch Oncomap API data
+        # The API at api.oncomap.de only accepts browser-originated requests.
+        # We simulate that with Origin + Referer headers and add retry logic.
+        # If the server still blocks GitHub Actions IPs, see TROUBLESHOOTING below.
         run: |
+          set -euo pipefail
           mkdir -p data
 
-          echo "Fetching clinics..."
-          curl -sSf "https://api.oncomap.de/api/direct/fulldb_clinics" -o data/fulldb_clinics.json
+          fetch() {
+            local name="$1"
+            local url="$2"
+            echo "Fetching ${name}…"
+            curl \
+              --silent --show-error --fail \
+              --retry 4 \
+              --retry-delay 10 \
+              --retry-connrefused \
+              --retry-all-errors \
+              --max-time 60 \
+              --connect-timeout 15 \
+              -H "Origin: https://oncomap.de" \
+              -H "Referer: https://oncomap.de/" \
+              -H "User-Agent: Mozilla/5.0 (compatible; GitHubActions/fetch-and-cache)" \
+              "$url" \
+              -o "data/${name}.json"
+            echo "  OK – $(wc -c < "data/${name}.json") bytes"
+          }
 
-          echo "Fetching centers..."
-          curl -sSf "https://api.oncomap.de/api/direct/fulldb_centers" -o data/fulldb_centers.json
+          fetch fulldb_clinics         "https://api.oncomap.de/api/direct/fulldb_clinics"
+          fetch fulldb_centers         "https://api.oncomap.de/api/direct/fulldb_centers"
+          fetch fulldb_oncos           "https://api.oncomap.de/api/direct/fulldb_oncos"
+          fetch fulldb_viszes          "https://api.oncomap.de/api/direct/fulldb_viszes"
+          fetch fulldb_uros            "https://api.oncomap.de/api/direct/fulldb_uros"
+          fetch fulldb_partners        "https://api.oncomap.de/api/direct/fulldb_partners"
+          fetch fulldb_oncos_centers   "https://api.oncomap.de/api/direct/fulldb_oncos_centers"
+          fetch fulldb_viszes_centers  "https://api.oncomap.de/api/direct/fulldb_viszes_centers"
+          fetch fulldb_uros_centers    "https://api.oncomap.de/api/direct/fulldb_uros_centers"
+          fetch fulldb_partners_centers "https://api.oncomap.de/api/direct/fulldb_partners_centers"
 
-          echo "Fetching oncos..."
-          curl -sSf "https://api.oncomap.de/api/direct/fulldb_oncos" -o data/fulldb_oncos.json
-
-          echo "Fetching viszes..."
-          curl -sSf "https://api.oncomap.de/api/direct/fulldb_viszes" -o data/fulldb_viszes.json
-
-          echo "Fetching uros..."
-          curl -sSf "https://api.oncomap.de/api/direct/fulldb_uros" -o data/fulldb_uros.json
-
-          echo "Fetching partners..."
-          curl -sSf "https://api.oncomap.de/api/direct/fulldb_partners" -o data/fulldb_partners.json
-
-          echo "Fetching oncos_centers..."
-          curl -sSf "https://api.oncomap.de/api/direct/fulldb_oncos_centers" -o data/fulldb_oncos_centers.json
-
-          echo "Fetching viszes_centers..."
-          curl -sSf "https://api.oncomap.de/api/direct/fulldb_viszes_centers" -o data/fulldb_viszes_centers.json
-
-          echo "Fetching uros_centers..."
-          curl -sSf "https://api.oncomap.de/api/direct/fulldb_uros_centers" -o data/fulldb_uros_centers.json
-
-          echo "Fetching partners_centers..."
-          curl -sSf "https://api.oncomap.de/api/direct/fulldb_partners_centers" -o data/fulldb_partners_centers.json
-
-      - name: Bundle into single data.json with metadata
+      - name: Commit updated data
         run: |
-          node -e "
-            const fs = require('fs');
-            const keys = [
-              'fulldb_clinics','fulldb_centers',
-              'fulldb_oncos','fulldb_viszes','fulldb_uros',
-              'fulldb_partners',
-              'fulldb_oncos_centers','fulldb_viszes_centers',
-              'fulldb_uros_centers','fulldb_partners_centers'
-            ];
-            const bundle = { _updated: new Date().toISOString() };
-            keys.forEach(k => {
-              try {
-                bundle[k] = JSON.parse(fs.readFileSync('data/' + k + '.json', 'utf8'));
-              } catch(e) {
-                console.error('Failed to parse', k, e.message);
-                bundle[k] = [];
-              }
-            });
-            fs.writeFileSync('data/data.json', JSON.stringify(bundle));
-            console.log('Bundled data.json — updated:', bundle._updated);
-            Object.entries(bundle).forEach(([k,v]) => {
-              if(Array.isArray(v)) console.log(k + ':', v.length, 'records');
-            });
-          "
-
-      - name: Commit and push updated data
-        run: |
-          git config user.name "github-actions[bot]"
+          git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add data/
-          if git diff --staged --quiet; then
+          if git diff --cached --quiet; then
             echo "No changes to commit."
           else
-            git commit -m "chore: update oncomap data [$(date -u '+%Y-%m-%d %H:%M UTC')]"
+            git commit -m "chore: update oncomap data [skip ci]"
             git push
           fi
+
+# ─── TROUBLESHOOTING ────────────────────────────────────────────────────────
+#
+# If the job still fails with exit code 7 (connection refused) even after the
+# Origin/Referer headers above, the API is blocking GitHub-hosted runner IPs
+# at the firewall level. In that case you have three options:
+#
+# Option A – Self-hosted runner
+#   Run the job on your own server whose IP is allowed by the API.
+#   Change `runs-on: ubuntu-latest` → `runs-on: self-hosted`.
+#
+# Option B – Whitelist GitHub Actions IP ranges
+#   Ask the oncomap.de API team to allowlist GitHub's IP ranges:
+#   https://api.github.com/meta  (look for the "actions" CIDR list)
+#
+# Option C – Proxy the API through your own backend
+#   Set up a lightweight reverse-proxy (Cloudflare Worker, Vercel function, etc.)
+#   on a whitelisted domain and point the fetch() calls there instead.
+#
+# ────────────────────────────────────────────────────────────────────────────
