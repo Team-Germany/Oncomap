@@ -28,7 +28,7 @@
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%;overflow:hidden;font-family:var(--sans);background:var(--bg);color:var(--text);font-size:13px}
 #map{position:fixed;inset:0;z-index:0}
-.leaflet-tile-pane{filter:grayscale(1) contrast(.9) brightness(1.08)}
+.leaflet-tile-pane{filter:saturate(.85) brightness(1.04)}
 .panel{position:fixed;top:14px;left:14px;bottom:14px;width:420px;z-index:9999;display:flex;flex-direction:column;gap:6px;pointer-events:none}
 .panel>*{pointer-events:all}
 .hdr{background:var(--surface);border:1px solid var(--border);border-radius:var(--rl);padding:13px 15px 11px;box-shadow:var(--sh);display:flex;align-items:center;justify-content:space-between;gap:10px;flex-shrink:0}
@@ -288,6 +288,9 @@ select{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/maplibre-gl@5.24.0/dist/maplibre-gl.css"/>
+<script src="https://cdn.jsdelivr.net/npm/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@maplibre/maplibre-gl-leaflet@0.1.4/leaflet-maplibre-gl.js"></script>
 <script>
 const LIVE={
   centers:'https://api.oncomap.de/api/direct/fulldb_centers',
@@ -307,7 +310,15 @@ const MAX_PARTNER_DIST_KM=250;
 
 const map=L.map('map',{zoomControl:false}).setView([51.2,10.4],6);
 L.control.zoom({position:'bottomright'}).addTo(map);
-L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'}).addTo(map);
+(function(){
+  // Basemap: OpenFreeMap Positron (vector, no API key, no limits). Fallback: Esri Light Gray (raster, no key).
+  const hasWebGL=(()=>{try{const c=document.createElement('canvas');return !!(window.WebGLRenderingContext&&(c.getContext('webgl2')||c.getContext('webgl')))}catch{return false}})();
+  if(hasWebGL&&window.maplibregl&&L.maplibreGL){
+    L.maplibreGL({style:'https://tiles.openfreemap.org/styles/positron',attribution:'<a href="https://openfreemap.org" target="_blank">OpenFreeMap</a> © <a href="https://www.openmaptiles.org/" target="_blank">OpenMapTiles</a> Data from <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a>'}).addTo(map);
+  }else{
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}',{maxZoom:16,attribution:'Tiles © Esri — Esri, HERE, Garmin, © OpenStreetMap contributors'}).addTo(map);
+  }
+})();
 map.createPane('lp');map.getPane('lp').style.zIndex=500;
 const LY={oz:L.layerGroup().addTo(map),center:L.layerGroup().addTo(map),partner:L.layerGroup().addTo(map),lines:L.layerGroup().addTo(map)};
 
